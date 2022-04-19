@@ -15,11 +15,11 @@ cd csci567
 # Install the package for namespace
 pip3 install -e .
 ```
-Create a data directory to store all the training data, submissions etc. None of this will be uploaded on github: 
+Create a data directory in the project folder to store all the training data, submissions etc. None of this will be uploaded on github, 
 ```
 # Download all the csv files and save here
 mkdir ./data
-export DATA_DIR=./data
+export DATA_DIR=/path/to/data
 ```
 After this you can use the utility files and get started with your own code. Create a separate brnach before starting.
 
