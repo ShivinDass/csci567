@@ -1,5 +1,6 @@
 from csci567.utils.data_utils import *
 
+import csv
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -73,7 +74,6 @@ def prepare_object_embed_idxs(articles_df, articles_features_dicts):
         article_embed_idxs[article["article_id"]] = article_embed_id
     return article_embed_idxs
 
-
 class PurchasesDataset(Dataset):
     '''dataset of purchases for contrastive learning'''
     def __init__(self, purchases_df, customers_index_dict, articles_index_dicts, device=None):
@@ -89,14 +89,14 @@ class PurchasesDataset(Dataset):
 
     def __getitem__(self, idx):
         customer_embed_id = self.customers_index_dict[self.customer_ids[idx]]
-        customer_most_recent_purchase = self.articles_index_dicts[self.purchases_ids[idx][-1]]
-        article_features_ids = self.articles_index_dicts[np.random.choice(self.purchases_ids[idx])]
-        return torch.tensor([customer_embed_id, *customer_most_recent_purchase]).to(self.device), torch.tensor(article_features_ids).to(self.device)
+        customer_recent_purchase = self.articles_index_dicts[np.random.choice(self.purchases_ids[idx])]
+        target_article_features_ids = self.articles_index_dicts[np.random.choice(self.purchases_ids[idx])]
+        return torch.tensor([customer_embed_id, *customer_recent_purchase]).to(self.device), torch.tensor(target_article_features_ids).to(self.device)
 
 
 class Encoder(nn.Module):
     '''Implements encoder to translate input embeddings into a meaningful representation'''
-    def __init__(self, in_dim, out_dim, num_hidden_layers=0, hidden_layer_dim=32, activation=nn.LeakyReLU, device=None):
+    def __init__(self, in_dim, out_dim, num_hidden_layers=1, hidden_layer_dim=32, activation=nn.LeakyReLU, device=None):
         super().__init__()
         self.device = torch.device(
             'cuda' if torch.cuda.is_available() else 'cpu') if device is None else device
@@ -116,7 +116,7 @@ class Encoder(nn.Module):
 class TwoTowerModel(nn.Module):
     '''Implements two tower contrastive learning'''
     def __init__(self, num_queries, num_features,
-                 query_embed_dim=4, input_embed_dim=36, representation_embed_dim=16, device=None):
+                 query_embed_dim=8, input_embed_dim=36, representation_embed_dim=16, device=None):
         super().__init__()
         self.device = torch.device(
             'cuda' if torch.cuda.is_available() else 'cpu') if device is None else device
@@ -143,7 +143,7 @@ class TwoTowerModel(nn.Module):
             [self.objects_embeddings[i](objects[:, i]) for i in range(len(ARTICLE_FEATURES_LIST))], dim=-1))
         return torch.matmul(queries_latents, objects_latents.T), target_perm
 
-    def predict(self, test_batch):
+    def predict(self, test_batch, topk):
         with torch.no_grad():
             queries, objects = test_batch
             queries_id_latents = self.queries_embeddings(queries[:, 0])
@@ -153,7 +153,7 @@ class TwoTowerModel(nn.Module):
             objects_latents = self.object_net(torch.cat(
                 [self.objects_embeddings[i](objects[:, i]) for i in range(len(ARTICLE_FEATURES_LIST))], dim=-1))
             logits = torch.matmul(queries_latents, objects_latents.T)
-        return torch.topk(logits, int(0.1 * len(objects)), dim=1).indices
+        return torch.topk(logits, topk, dim=1).indices
 
     def loss(self, logits, targets):
         return self.loss_criterion(logits, targets)
@@ -209,6 +209,7 @@ class TwoTowerTrainer:
             ax1.plot(val_accs)
             ax1.title.set_text("train acc")
             plt.savefig(self.save_plot_path)
+            plt.close()
         print("Done!")
 
     def validate(self):
@@ -216,7 +217,7 @@ class TwoTowerTrainer:
         correct = 0
         for batch in self.test_dataloader:
             test_batch = batch
-        prediction = self.model.predict(test_batch)
+        prediction = self.model.predict(test_batch, int(0.1 * len(test_batch[1])))
         for i in range(len(prediction)):
             correct += 1 if i in prediction[i] else 0
         return correct / len(prediction)
@@ -224,57 +225,133 @@ class TwoTowerTrainer:
 
 
 if __name__ == "__main__":
-    # Init
-    experiment_name = "two_tower_net_overfit_5e4"
-    print(f"Initializing experiment: {experiment_name}")
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    epochs = 10000
-    val_size = 100
-    learning_rate = 5e-4
+    train = True
+    test = True
 
-    # Load in training data
-    print("Loading in training data")
-    transactions_df = get_train_data(cutoff_date=None)
-    purchases_df, customers_index_dict, articles_index_dict = get_customer_purchases(
-        transactions_df, after="2020-08-22")
-    articles_df = pd.read_csv(os.path.join(os.environ["DATA_DIR"], "articles.csv"), dtype={"article_id": str}).fillna("None")
-    articles_features_dicts, num_features, total_features = get_object_features(articles_df)
-    article_index_dicts = prepare_object_embed_idxs(articles_df, articles_features_dicts)
-    
-    print(f"# unique customer: {len(customers_index_dict)}")
-    print(f"# unique articles: {len(articles_index_dict)}")
-    print(f"# unique article features: {total_features}")
-    del transactions_df
-    del articles_df
-    del articles_features_dicts
+    if train:
+        # Init
+        experiment_name = "two_tower_symmetric_net"
+        print(f"Initializing experiment: {experiment_name}")
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        epochs = 10000
+        val_size = 100
+        learning_rate = 5e-4
 
-    with open(os.path.join(os.environ["EXP_DIR"], f"{experiment_name}_customers_index_dict.pkl"), 'wb') as f:
-        pickle.dump(customers_index_dict, f)
-    with open(os.path.join(os.environ["EXP_DIR"], f"{experiment_name}_articles_index_dicts.pkl"), 'wb') as f:
-        pickle.dump(article_index_dicts, f)
-    
-    training_purchases_df = purchases_df[:val_size]
-    testing_purchases_df = purchases_df[:val_size]
-    
-    # Make dataset and dataloader
-    print("Making purchases dataloader")
-    training_purchases_dataset = PurchasesDataset(
-        training_purchases_df, customers_index_dict, article_index_dicts, device=device)
-    training_purchases_dataloader = DataLoader(
-        training_purchases_dataset, batch_size=10, drop_last=True, shuffle=True)
-    testing_purchases_dataset = PurchasesDataset(
-        testing_purchases_df, customers_index_dict, article_index_dicts, device=device)
-    testing_purchases_dataloader = DataLoader(
-        testing_purchases_dataset, batch_size=val_size, drop_last=True, shuffle=False)
+        # Load in training data
+        print("Loading in training data")
+        transactions_df = get_train_data(cutoff_date=None)
+        purchases_df, customers_index_dict, articles_index_dict = get_customer_purchases(
+            transactions_df, after="2020-08-22")
+        articles_df = pd.read_csv(os.path.join(os.environ["DATA_DIR"], "articles.csv"), dtype={"article_id": str}).fillna("None")
+        articles_features_dicts, num_features, total_features = get_object_features(articles_df)
+        article_index_dicts = prepare_object_embed_idxs(articles_df, articles_features_dicts)
 
-    # Make model and trainer
-    print("Making model and trainer")
-    two_tower_model = TwoTowerModel(
-        len(customers_index_dict), num_features, device=device)
-    count_parameters(two_tower_model)
-    two_tower_trainer = TwoTowerTrainer(
-        two_tower_model, training_purchases_dataloader, testing_purchases_dataloader, epochs, learning_rate, experiment_name)
-    
-    # Start training
-    print("Starting training")
-    two_tower_trainer.train()
+        print(f"# unique customer: {len(customers_index_dict)}")
+        print(f"# unique articles: {len(articles_index_dict)}")
+        print(f"# unique article features: {total_features}")
+        del transactions_df
+        del articles_df
+        del articles_features_dicts
+
+        with open(os.path.join(os.environ["EXP_DIR"], f"{experiment_name}_customers_index_dict.pkl"), 'wb') as f:
+            pickle.dump(customers_index_dict, f)
+        with open(os.path.join(os.environ["EXP_DIR"], f"{experiment_name}_articles_index_dicts.pkl"), 'wb') as f:
+            pickle.dump(article_index_dicts, f)
+
+        training_purchases_df = purchases_df[:val_size]
+        testing_purchases_df = purchases_df[:val_size]
+
+        # Make dataset and dataloader
+        print("Making purchases dataloader")
+        training_purchases_dataset = PurchasesDataset(
+            training_purchases_df, customers_index_dict, article_index_dicts, device=device)
+        training_purchases_dataloader = DataLoader(
+            training_purchases_dataset, batch_size=20, drop_last=True, shuffle=True)
+        testing_purchases_dataset = PurchasesDataset(
+            testing_purchases_df, customers_index_dict, article_index_dicts, device=device)
+        testing_purchases_dataloader = DataLoader(
+            testing_purchases_dataset, batch_size=val_size, drop_last=True, shuffle=False)
+
+        # Make model and trainer
+        print("Making model and trainer")
+        two_tower_model = TwoTowerModel(
+            len(customers_index_dict), num_features, device=device)
+        count_parameters(two_tower_model)
+        two_tower_trainer = TwoTowerTrainer(
+            two_tower_model, training_purchases_dataloader, testing_purchases_dataloader, epochs, learning_rate, experiment_name)
+
+        # Start training
+        print("Starting training")
+        two_tower_trainer.train()
+
+    if test:
+        # Init
+        experiment_name = "two_tower_symmetric_net"
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        # Load model and saved index dictionaries
+        print(f"Loading in model and index dictionaries")
+        model = torch.load(os.path.join(
+            os.environ["EXP_DIR"], f"{experiment_name}.pt"), map_location=device)
+        with open(os.path.join(os.environ["EXP_DIR"], f"{experiment_name}_customers_index_dict.pkl"), 'rb') as f:
+            customers_index_dict = pickle.load(f)
+        with open(os.path.join(os.environ["EXP_DIR"], f"{experiment_name}_articles_index_dicts.pkl"), 'rb') as f:
+            articles_index_dicts = pickle.load(f)
+
+        # load in testing data
+        print("Loading in testing data")
+        conditioning_transactions_df = get_train_data(cutoff_date="2020-09-15")
+        conditioning_purchases_df, _, _ = get_customer_purchases(
+            conditioning_transactions_df, after="2020-08-22")
+        del conditioning_transactions_df
+
+        target_transactions_df = get_train_data(cutoff_date=None)
+        target_purchases_df, _, _ = get_customer_purchases(
+            target_transactions_df, after="2020-09-16")
+        del target_transactions_df
+
+        articles_df = pd.read_csv(os.path.join(os.environ["DATA_DIR"], "articles.csv"), dtype={"article_id": str}).fillna("None")
+
+        # prepare testing data for prediction
+        customers_input = []
+        customer_ids = []
+        for _, row in conditioning_purchases_df.iterrows():
+            customer_ids.append(row["customer_id"])
+            customer_embed_id = customers_index_dict[row["customer_id"]]
+            customer_most_recent_purchase = articles_index_dicts[row["article_id"][-1]]
+            customers_input.append([customer_embed_id, *customer_most_recent_purchase])
+        customers_input = torch.tensor(customers_input).to(device)
+        print(f"customers_input.shape: {customers_input.shape}")
+
+        articles_input = []
+        article_ids = []
+        for article_id in articles_df["article_id"].to_numpy():
+            if article_id in articles_index_dicts:
+                article_ids.append(article_id)
+                articles_input.append(articles_index_dicts[article_id])
+        articles_input = torch.tensor(articles_input).to(device)
+        print(f"articles_input.shape: {articles_input.shape}")
+
+        # run predictions
+        print(f"running predictions")
+        print(f"first and last customers: {customer_ids[0], customer_ids[-1]}")
+        submission = []
+        pbar = tqdm(total=len(customer_ids))
+        i = 0
+        batch = 100
+        while i < len(customer_ids):
+            predictions = model.predict(
+                (customers_input[i:i+batch], articles_input), 12)
+            for j, prediction in enumerate(predictions):
+                customer_prediction = [article_ids[p] for p in prediction]
+                submission.append({"customer_id": customer_ids[i+j], "prediction": " ".join(customer_prediction)})
+            pbar.update(batch)
+            i += batch
+        pbar.close()
+
+        fieldnames = ['customer_id', 'prediction']
+        print("Writing predictions")
+        with open(os.path.join(os.environ["EXP_DIR"], f"{experiment_name}_submission.csv"), 'w') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(submission)
