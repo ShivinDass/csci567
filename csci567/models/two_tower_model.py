@@ -6,7 +6,6 @@ import numpy as np
 import os
 import pandas as pd
 import pickle
-from prettytable import PrettyTable
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
@@ -27,19 +26,6 @@ ARTICLE_FEATURES_SIZE = {
 }
 ARTICLE_FEATURES_LIST = list(ARTICLE_FEATURES_SIZE.keys())
 
-
-def count_parameters(model):
-    table = PrettyTable(["Modules", "Parameters"])
-    total_params = 0
-    for name, parameter in model.named_parameters():
-        if not parameter.requires_grad:
-            continue
-        param = parameter.numel()
-        table.add_row([name, param])
-        total_params += param
-    print(table)
-    print(f"Total Trainable Params: {total_params}")
-    return total_params
 
 def get_customer_purchases(transactions_df, after="2020-08-23"):
     ''' returns purchases_df: customer_id -> list of purchased article_ids'''
@@ -266,7 +252,7 @@ if __name__ == "__main__":
         training_purchases_dataset = PurchasesDataset(
             training_purchases_df, customers_index_dict, article_index_dicts, device=device)
         training_purchases_dataloader = DataLoader(
-            training_purchases_dataset, batch_size=20, drop_last=True, shuffle=True)
+            training_purchases_dataset, batch_size=64, drop_last=True, shuffle=True)
         testing_purchases_dataset = PurchasesDataset(
             testing_purchases_df, customers_index_dict, article_index_dicts, device=device)
         testing_purchases_dataloader = DataLoader(

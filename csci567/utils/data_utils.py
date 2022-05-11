@@ -1,5 +1,7 @@
 import os
 import pandas as pd
+from prettytable import PrettyTable
+
 
 def load_csv(filename, dtype=str):
 	'''
@@ -62,3 +64,17 @@ def get_val_data(cutoff_date = '2020-09-16'):
 	val = load_csv("validation_{}.csv".format(cutoff_date))
 
 	return val
+
+
+def count_parameters(model):
+    table = PrettyTable(["Modules", "Parameters"])
+    total_params = 0
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad:
+            continue
+        param = parameter.numel()
+        table.add_row([name, param])
+        total_params += param
+    print(table)
+    print(f"Total Trainable Params: {total_params}")
+    return total_params
