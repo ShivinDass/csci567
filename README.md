@@ -41,3 +41,12 @@ python -m ipykernel install --user --name=myvenv
 ```
 After this you can launch ```jupyter notebook``` and choose your kernel when creating a new notebook.
 
+### Two-Tower Training Plots
+#### Naive Parameterization (unique embedding per customer and article)
+![two tower naive](https://github.com/ShivinDass/csci567/blob/main/figures/two_tower_naive.png)
+#### Small Network (feature-wise parameterization)
+![two tower small](https://github.com/ShivinDass/csci567/blob/main/figures/two_tower_small.jpeg)
+#### Medium Network (feature-wise parameterization)
+![two tower medium](https://github.com/ShivinDass/csci567/blob/main/figures/two_tower_medium.jpeg)
+#### Large Network (feature-wise parameterization)
+![two tower large](https://github.com/ShivinDass/csci567/blob/main/figures/two_tower_large.jpeg)
